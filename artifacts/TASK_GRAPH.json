@@ -1,0 +1,283 @@
+[
+  {
+    "id": "T001",
+    "name": "Create config module with settings",
+    "module": "config",
+    "files": [
+      "src/config.py"
+    ],
+    "depends_on": [],
+    "size": "S",
+    "risk_level": "low",
+    "description": "Create Settings class using pydantic-settings for database URL, JWT secret, bcrypt cost, rate limit config. Implement get_settings dependency injection function.",
+    "done_criteria": [
+      "Settings loads from environment variables",
+      "get_settings returns singleton",
+      "Database URL and JWT secret are configurable"
+    ],
+    "test_file": "tests/unit/test_config.py"
+  },
+  {
+    "id": "T002",
+    "name": "Create email validator utility",
+    "module": "utils.validators",
+    "files": [
+      "utils/validators.py"
+    ],
+    "depends_on": [],
+    "size": "S",
+    "risk_level": "low",
+    "description": "Create EmailValidator class with validate method that checks email format. Raise ValidationError for invalid emails.",
+    "done_criteria": [
+      "EmailValidator validates email format correctly",
+      "ValidationError raised for invalid emails"
+    ],
+    "test_file": "tests/unit/test_validators.py"
+  },
+  {
+    "id": "T003",
+    "name": "Create domain models and schemas",
+    "module": "auth.models",
+    "files": [
+      "src/auth/models.py"
+    ],
+    "depends_on": [],
+    "size": "S",
+    "risk_level": "low",
+    "description": "Create SQLAlchemy User model with id, email, hashed_password, created_at. Create Pydantic schemas: UserCreate, UserLogin, UserResponse, TokenPayload, TokenPair, RefreshRequest.",
+    "done_criteria": [
+      "User SQLAlchemy model defined",
+      "All Pydantic schemas export correctly",
+      "UserResponse excludes password"
+    ],
+    "test_file": "tests/unit/test_models.py"
+  },
+  {
+    "id": "T004",
+    "name": "Create custom exception hierarchy",
+    "module": "auth.exceptions",
+    "files": [
+      "src/auth/exceptions.py"
+    ],
+    "depends_on": [],
+    "size": "S",
+    "risk_level": "low",
+    "description": "Create AuthException base class with status_code and detail. Implement AuthenticationError, InvalidCredentialsError, InvalidTokenError, ExpiredTokenError, DuplicateEmailError, RateLimitExceededError, ValidationException.",
+    "done_criteria": [
+      "All exceptions have correct HTTP status codes",
+      "Exceptions include detail field"
+    ],
+    "test_file": "tests/unit/test_exceptions.py"
+  },
+  {
+    "id": "T005",
+    "name": "Create user repository interface and implementation",
+    "module": "auth.repositories",
+    "files": [
+      "src/auth/repositories.py"
+    ],
+    "depends_on": [
+      "T003"
+    ],
+    "size": "M",
+    "risk_level": "medium",
+    "description": "Create UserRepository Protocol with methods: create, get_by_id, get_by_email, exists_by_email. Create UserRepositoryImpl using SQLAlchemy with database connection pool from config.",
+    "done_criteria": [
+      "Repository interface defined",
+      "SQLAlchemy implementation creates users",
+      "get_by_email returns user or None",
+      "exists_by_email returns boolean"
+    ],
+    "test_file": "tests/unit/test_user_repository.py"
+  },
+  {
+    "id": "T006",
+    "name": "Create password hashing service",
+    "module": "auth.services.password_service",
+    "files": [
+      "src/auth/services/password_service.py"
+    ],
+    "depends_on": [],
+    "size": "S",
+    "risk_level": "high",
+    "description": "Create PasswordService with hash_password and verify_password methods using bcrypt with cost 12. Performance target under 50ms.",
+    "done_criteria": [
+      "Password hashed with bcrypt cost 12",
+      "verify_password returns True for correct password",
+      "verify_password returns False for incorrect password"
+    ],
+    "test_file": "tests/unit/test_password_service.py"
+  },
+  {
+    "id": "T007",
+    "name": "Create JWT token service",
+    "module": "auth.services.token_service",
+    "files": [
+      "src/auth/services/token_service.py"
+    ],
+    "depends_on": [
+      "T003",
+      "T004"
+    ],
+    "size": "S",
+    "risk_level": "high",
+    "description": "Create TokenService with create_access_token, create_refresh_token, validate_token, decode_token using HS256 algorithm. Access token expires in 24 hours, refresh in 7 days.",
+    "done_criteria": [
+      "Access token contains user_id and email claims",
+      "Refresh token contains user_id claim",
+      "validate_token raises InvalidTokenError or ExpiredTokenError",
+      "Token generation under 10ms"
+    ],
+    "test_file": "tests/unit/test_token_service.py"
+  },
+  {
+    "id": "T008",
+    "name": "Create user service with registration logic",
+    "module": "auth.services.user_service",
+    "files": [
+      "src/auth/services/user_service.py"
+    ],
+    "depends_on": [
+      "T002",
+      "T005",
+      "T006"
+    ],
+    "size": "S",
+    "risk_level": "medium",
+    "description": "Create UserService with register_user, get_user_by_id, get_user_by_email. Register validates email, checks duplicates, hashes password, persists user. Raises DuplicateEmailError on conflict.",
+    "done_criteria": [
+      "register_user validates email format",
+      "register_user raises DuplicateEmailError for existing email",
+      "register_user hashes password before persistence",
+      "get_user_by_id and get_user_by_email work correctly"
+    ],
+    "test_file": "tests/unit/test_user_service.py"
+  },
+  {
+    "id": "T009",
+    "name": "Create auth service facade",
+    "module": "auth.services.auth_service",
+    "files": [
+      "src/auth/services/auth_service.py"
+    ],
+    "depends_on": [
+      "T007",
+      "T008",
+      "T004"
+    ],
+    "size": "S",
+    "risk_level": "high",
+    "description": "Create AuthService orchestrating register, login, refresh_token, validate_token. Register and login generate token pairs. Login verifies password. refresh_token validates refresh token and generates new pair.",
+    "done_criteria": [
+      "register returns TokenPair",
+      "login returns TokenPair",
+      "login raises InvalidCredentialsError on wrong password",
+      "refresh_token validates and rotates tokens"
+    ],
+    "test_file": "tests/unit/test_auth_service.py"
+  },
+  {
+    "id": "T010",
+    "name": "Create rate limiter middleware",
+    "module": "auth.middleware.rate_limiter",
+    "files": [
+      "src/auth/middleware/rate_limiter.py"
+    ],
+    "depends_on": [
+      "T004",
+      "T001"
+    ],
+    "size": "S",
+    "risk_level": "medium",
+    "description": "Create RateLimitMiddleware for IP-based rate limiting with 10 requests per 60 second window. Implement in-memory storage with interface for Redis swap. Raise RateLimitExceededError when exceeded.",
+    "done_criteria": [
+      "Middleware blocks after 10 requests in 60 seconds",
+      "RateLimitExceededError raised with 429 status",
+      "In-memory storage works correctly"
+    ],
+    "test_file": "tests/unit/test_rate_limiter.py"
+  },
+  {
+    "id": "T011",
+    "name": "Create JWT auth middleware",
+    "module": "auth.middleware.auth_middleware",
+    "files": [
+      "src/auth/middleware/auth_middleware.py"
+    ],
+    "depends_on": [
+      "T007",
+      "T004"
+    ],
+    "size": "S",
+    "risk_level": "high",
+    "description": "Create JWTAuthMiddleware extracting JWT from Authorization header. Create get_current_user dependency that validates token and injects user. Raise InvalidTokenError or ExpiredTokenError.",
+    "done_criteria": [
+      "Middleware extracts Bearer token",
+      "get_current_user returns current user",
+      "Invalid tokens raise 401"
+    ],
+    "test_file": "tests/unit/test_auth_middleware.py"
+  },
+  {
+    "id": "T012",
+    "name": "Create FastAPI dependency injection",
+    "module": "auth.api.dependencies",
+    "files": [
+      "src/auth/api/dependencies.py"
+    ],
+    "depends_on": [
+      "T009",
+      "T005"
+    ],
+    "size": "S",
+    "risk_level": "low",
+    "description": "Create get_auth_service and get_user_repository FastAPI dependencies for dependency injection.",
+    "done_criteria": [
+      "get_auth_service returns AuthService instance",
+      "get_user_repository returns UserRepository instance"
+    ],
+    "test_file": "tests/unit/test_dependencies.py"
+  },
+  {
+    "id": "T013",
+    "name": "Create API routes for authentication",
+    "module": "auth.api.routes",
+    "files": [
+      "src/auth/api/routes.py"
+    ],
+    "depends_on": [
+      "T009",
+      "T011",
+      "T012",
+      "T003"
+    ],
+    "size": "S",
+    "risk_level": "medium",
+    "description": "Create APIRouter with POST /auth/register, POST /auth/login, POST /auth/refresh, GET /auth/me endpoints. Register returns UserResponse with 201. Login returns TokenPair. Refresh returns new TokenPair. /me requires auth.",
+    "done_criteria": [
+      "POST /register creates user and returns 201",
+      "POST /login returns TokenPair with 200",
+      "POST /refresh returns new TokenPair",
+      "GET /me returns UserResponse with auth required"
+    ],
+    "test_file": "tests/unit/test_routes.py"
+  },
+  {
+    "id": "T014",
+    "name": "Create test fixtures configuration",
+    "module": "tests.conftest",
+    "files": [
+      "tests/conftest.py"
+    ],
+    "depends_on": [],
+    "size": "S",
+    "risk_level": "low",
+    "description": "Create shared pytest fixtures including test database session, mock settings, test user data, sample tokens for testing all components.",
+    "done_criteria": [
+      "Database session fixture available",
+      "Mock settings fixture available",
+      "Test user fixtures available"
+    ],
+    "test_file": "tests/conftest.py"
+  }
+]

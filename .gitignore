@@ -1,0 +1,40 @@
+# Python virtual environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Project artifacts
+.pipeline/logs/*.log
+
+# Docker
+ai-pipeline-sandbox.tar
+
+# Temporary
+temp/
+tmp/
