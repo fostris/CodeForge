@@ -6,11 +6,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """Pipeline configuration from environment variables."""
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
     
     # Project paths
     project_root: Path = Path(__file__).parent.parent
@@ -44,11 +49,6 @@ class Settings(BaseSettings):
     log_format: str = "json"
     log_dir: Path = Path(__file__).parent.parent / ".pipeline" / "logs"
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        extra = "ignore"
-
 
 @dataclass
 class ModelTier:

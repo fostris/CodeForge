@@ -1,7 +1,7 @@
 import os
 from typing import Dict, Optional
 from pydantic import BaseModel, Field, field_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from passlib.context import CryptContext
 import logging
 
@@ -10,6 +10,10 @@ class ModelTierConfig(BaseModel):
     cost_per_request: float = Field(default=0.01)
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="APP_",
+        case_sensitive=False,
+    )
     # Database
     database_url: str = Field(default="sqlite:///./test.db")
     
@@ -73,10 +77,6 @@ class Settings(BaseSettings):
             raise ValueError(f"log_level must be one of {valid_levels}")
         return v
     
-    class Config:
-        env_prefix = "APP_"
-        case_sensitive = False
-
 _settings_instance: Optional[Settings] = None
 
 def get_settings() -> Settings:
@@ -109,9 +109,12 @@ def get_logger(name: str) -> logging.Logger:
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12)
 
 # Update rounds when settings are loaded
-def _update_pwd_context():
+def _update_pwd_context() -> None:
     settings = get_settings()
     pwd_context.bcrypt__rounds = settings.bcrypt_cost
 
-# Initialize with correct rounds
-_update_pwd_context()
+
+def get_pwd_context() -> CryptContext:
+    """Return password context with rounds synchronized to current settings."""
+    _update_pwd_context()
+    return pwd_context

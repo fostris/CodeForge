@@ -142,17 +142,7 @@ class ContextBuilder:
     @property
     def task_graph(self) -> list:
         if self._task_graph is None:
-            try:
-                self._task_graph = self.loader.load_task_graph()
-            except AttributeError:
-                # TASK_GRAPH.json is a plain list (not {"tasks": [...]})
-                # — load it directly
-                tg_path = self.artifacts_dir / "TASK_GRAPH.json"
-                if tg_path.exists():
-                    data = json.loads(tg_path.read_text(encoding="utf-8"))
-                    self._task_graph = data if isinstance(data, list) else data.get("tasks", [])
-                else:
-                    self._task_graph = []
+            self._task_graph = self.loader.load_task_graph()
         return self._task_graph
 
     # ------------------------------------------------------------------
@@ -865,7 +855,8 @@ class ContextBuilder:
             import_hints.append(f"from {module_path} import ...")
         import_hints_str = chr(10).join(import_hints)
 
-        impl_files = ', '.join(task.get('files', []))
+        impl_file_list = task.get('files', [])
+        impl_files = ', '.join(impl_file_list)
         test_file = task.get('test_file', 'tests/unit/test_module.py')
 
         prompt = (
@@ -897,16 +888,22 @@ class ContextBuilder:
             "- Tests: for Settings, use @patch.dict('os.environ', {...}) or pass values to constructor\n"
             "- Tests: each test must be independent. Use fixtures for shared setup.\n\n"
             "OUTPUT FORMAT — you MUST use these EXACT markers:\n\n"
-            f"=== IMPLEMENTATION: {impl_files.split(',')[0].strip()} ===\n"
-            "<your implementation code here>\n\n"
+            + "".join(
+                f"=== IMPLEMENTATION: {f} ===\n"
+                "<code for this exact file only>\n\n"
+                for f in impl_file_list
+            )
+            + 
             f"=== TESTS: {test_file} ===\n"
             "<your test code here>\n\n"
             "Rules for output:\n"
             "- Pure Python code only inside each section\n"
             "- No markdown fences (no ```python)\n"
-            "- Implementation starts with imports\n"
+            "- Each IMPLEMENTATION block must contain code ONLY for that file\n"
+            "- Do NOT include marker lines inside code\n"
+            "- Implementation blocks start with imports where needed\n"
             "- Tests start with 'import pytest'\n"
-            "- Both sections are REQUIRED\n"
+            "- All IMPLEMENTATION blocks and TESTS section are REQUIRED\n"
         )
 
         iteration = context.get("iteration", 1)

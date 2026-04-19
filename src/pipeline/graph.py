@@ -119,38 +119,50 @@ def _write_code_to_file(filepath: str, code: str, project_root: Path) -> bool:
         return False
 
 
-def _parse_single_call_response(response: str) -> tuple:
+def _parse_single_call_response(response: str) -> tuple[dict[str, str], str]:
     """
-    Parse a single-call LLM response into (implementation_code, test_code).
+    Parse a single-call LLM response into (implementation_code_by_file, test_code).
 
-    Expects markers like:
-        === IMPLEMENTATION: path/file.py ===
-        <code>
-        === TESTS: tests/unit/test_file.py ===
-        <code>
+    Supports both:
+      - single implementation section
+      - multi-file implementation sections:
+          === IMPLEMENTATION: src/a.py ===
+          ...
+          === IMPLEMENTATION: src/b.py ===
+          ...
+          === TESTS: tests/unit/test_x.py ===
+          ...
 
-    Falls back to code-block extraction if markers not found.
+    Falls back to code-block extraction if markers are not found.
     """
     if not response:
-        return "", ""
+        return {}, ""
 
-    # Try marker-based parsing first
-    impl_match = re.search(
-        r'===\s*IMPLEMENTATION[:\s][^=]*===\s*\n(.*?)(?====\s*TESTS|$)',
-        response, re.DOTALL
+    section_pattern = re.compile(
+        r"===\s*(IMPLEMENTATION|TESTS)\s*:\s*([^=\n]+?)\s*===\s*\n",
+        re.IGNORECASE,
     )
-    test_match = re.search(
-        r'===\s*TESTS[:\s][^=]*===\s*\n(.*?)$',
-        response, re.DOTALL
-    )
+    matches = list(section_pattern.finditer(response))
+    if matches:
+        implementations: dict[str, str] = {}
+        test_code = ""
 
-    if impl_match and test_match:
-        impl_code = impl_match.group(1).strip()
-        test_code = test_match.group(1).strip()
-        # Strip markdown fences if present
-        impl_code = _extract_code_from_response(impl_code) if '```' in impl_code else impl_code
-        test_code = _extract_code_from_response(test_code) if '```' in test_code else test_code
-        return impl_code, test_code
+        for idx, match in enumerate(matches):
+            section_type = match.group(1).upper()
+            section_file = match.group(2).strip()
+            start = match.end()
+            end = matches[idx + 1].start() if idx + 1 < len(matches) else len(response)
+            section_body = response[start:end].strip()
+
+            code = _extract_code_from_response(section_body) if "```" in section_body else section_body
+            if section_type == "IMPLEMENTATION":
+                if section_file:
+                    implementations[section_file] = code
+            elif section_type == "TESTS":
+                test_code = code
+
+        if implementations or test_code:
+            return implementations, test_code
 
     # Fallback: try to split on code blocks with filename hints
     blocks = re.findall(r'```(?:python)?\s*\n(.*?)```', response, re.DOTALL)
@@ -164,9 +176,9 @@ def _parse_single_call_response(response: str) -> tuple:
             elif impl_block is None:
                 impl_block = block.strip()
         if impl_block and test_block:
-            return impl_block, test_block
+            return {"__default__": impl_block}, test_block
         # Just take first two
-        return blocks[0].strip(), blocks[1].strip()
+        return {"__default__": blocks[0].strip()}, blocks[1].strip()
 
     # Last resort: try to find the split point
     if 'import pytest' in response:
@@ -175,9 +187,9 @@ def _parse_single_call_response(response: str) -> tuple:
         before = response[:idx].rstrip()
         after = response[idx:].strip()
         if before and after:
-            return _extract_code_from_response(before), after
+            return {"__default__": _extract_code_from_response(before)}, after
 
-    return _extract_code_from_response(response), ""
+    return {"__default__": _extract_code_from_response(response)}, ""
 
 
 # ---------------------------------------------------------------------------
@@ -532,7 +544,7 @@ class PipelineOrchestrator:
             try:
                 task_graph_path.parent.mkdir(parents=True, exist_ok=True)
                 task_graph_path.write_text(
-                    json.dumps(tasks, indent=2, ensure_ascii=False),
+                    json.dumps({"tasks": tasks}, indent=2, ensure_ascii=False),
                     encoding="utf-8",
                 )
                 logger.info(f"Saved decomposition to {task_graph_path}")
@@ -794,9 +806,9 @@ class PipelineOrchestrator:
             state["response"] = response
 
             # Parse response into impl + tests
-            impl_code, test_code = _parse_single_call_response(response)
+            impl_code_map, test_code = _parse_single_call_response(response)
 
-            if not impl_code:
+            if not impl_code_map:
                 logger.error("Failed to extract implementation from single-call response")
                 state["last_error"] = "No implementation code in response"
                 return False
@@ -806,17 +818,40 @@ class PipelineOrchestrator:
                 state["last_error"] = "No test code in response"
                 return False
 
-            # Apply safety nets to implementation
-            impl_code = fix_impl_code(impl_code)
-            state["implementation_code_clean"] = impl_code
+            required_impl_files = task.get("files", [])
+
+            # Single-file fallback compatibility for non-marker responses
+            if (
+                len(required_impl_files) == 1
+                and "__default__" in impl_code_map
+                and required_impl_files[0] not in impl_code_map
+            ):
+                impl_code_map[required_impl_files[0]] = impl_code_map.pop("__default__")
+
+            missing_files = [f for f in required_impl_files if f not in impl_code_map]
+            if missing_files:
+                logger.error(f"Missing implementation sections for files: {missing_files}")
+                state["last_error"] = f"Missing implementation code for files: {', '.join(missing_files)}"
+                return False
+
+            cleaned_impl_map = {
+                filepath: fix_impl_code(code)
+                for filepath, code in impl_code_map.items()
+                if filepath in required_impl_files
+            }
+            # Keep state field string-compatible for existing flow/rollback
+            state["implementation_code_clean"] = "\n\n".join(
+                cleaned_impl_map[f] for f in required_impl_files if f in cleaned_impl_map
+            )
 
             # Apply safety nets to tests
             test_code = fix_test_code(test_code)
             state["test_code_clean"] = test_code
 
             # Write implementation files
-            for filepath in task.get("files", []):
-                if _write_code_to_file(filepath, impl_code, config.workspace_dir):
+            for filepath in required_impl_files:
+                impl_code = cleaned_impl_map.get(filepath)
+                if impl_code and _write_code_to_file(filepath, impl_code, config.workspace_dir):
                     logger.info(f"Wrote implementation file: {filepath}")
 
             # Write test file
