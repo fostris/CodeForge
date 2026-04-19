@@ -61,6 +61,30 @@ def test_load_task_graph(tmp_path):
     assert tasks[0]["size"] == "S"
 
 
+def test_load_task_graph_plain_list_backward_compatible(tmp_path):
+    """Test loading old TASK_GRAPH.json format as plain list."""
+    tasks_file = tmp_path / "TASK_GRAPH.json"
+    tasks_file.write_text(json.dumps([
+        {
+            "id": "T001",
+            "name": "Setup",
+            "module": "config",
+            "files": ["config.py"],
+            "depends_on": [],
+            "size": "S",
+            "risk_level": "low",
+            "done_criteria": ["Config loads"],
+            "test_file": "tests/test_config.py",
+        }
+    ]))
+
+    loader = ArtifactLoader(tmp_path)
+    tasks = loader.load_task_graph("TASK_GRAPH.json")
+
+    assert len(tasks) == 1
+    assert tasks[0]["id"] == "T001"
+
+
 def test_load_spec(tmp_path):
     """Test loading spec markdown."""
     spec_file = tmp_path / "SPEC.md"

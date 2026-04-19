@@ -46,7 +46,7 @@ class ArtifactLoader:
         try:
             with open(path, "r") as f:
                 data = json.load(f)
-            tasks = data.get("tasks", [])
+            tasks = data if isinstance(data, list) else data.get("tasks", [])
             logger.info(f"Loaded {len(tasks)} tasks from task graph")
             return tasks
         except Exception as e:
