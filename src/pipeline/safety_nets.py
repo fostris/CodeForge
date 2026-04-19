@@ -10,6 +10,11 @@ logger = get_logger(__name__)
 
 def fix_impl_code(code: str) -> str:
     """Fix common LLM mistakes in implementation code before writing to disk."""
+    if code is None:
+        return None
+    if code == "":
+        return ""
+
     # Fix: Base = DeclarativeBase() → class Base(DeclarativeBase): pass
     if "DeclarativeBase()" in code:
         logger.warning("Fixing DeclarativeBase() → class Base(DeclarativeBase): pass")
