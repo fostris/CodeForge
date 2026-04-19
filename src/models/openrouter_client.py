@@ -15,7 +15,9 @@ class OpenRouterClient(ModelClient):
 
     def __init__(self, api_key: Optional[str] = None):
         super().__init__("openrouter")
-        self.api_key = api_key or config.openrouter_api_key
+        # Only use config fallback when api_key is not explicitly provided.
+        # Passing an explicit empty string should keep it empty (useful for tests).
+        self.api_key = config.openrouter_api_key if api_key is None else api_key
         self.base_url = config.openrouter_url
         self.timeout = config.openrouter_timeout
 
