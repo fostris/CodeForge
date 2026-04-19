@@ -2,8 +2,9 @@
 
 import logging
 import sys
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Optional
 
 from pydantic_settings import BaseSettings
 
@@ -49,25 +50,43 @@ class Settings(BaseSettings):
         extra = "ignore"
 
 
+@dataclass
+class ModelTier:
+    """Model tier definition."""
+
+    description: str
+    models: list[str]
+    tasks: list[str]
+    ram_gb: Optional[str] = None
+    cost_per_1k: float = 0.0
+    latency_ms: int = 0
+
+
 # Model tier definitions
-MODEL_TIERS: Dict[str, Dict[str, Any]] = {
-    "local_cheap": {
-        "description": "Fast, simple tasks",
-        "models": ["qwen2.5-coder:7b", "codellama:7b"],
-        "ram_gb": "4-6",
-        "tasks": ["formatting", "docstrings", "small fixes", "simple test gen", "S-tasks"],
-    },
-    "local_strong": {
-        "description": "Complex local tasks",
-        "models": ["qwen2.5-coder:32b", "deepseek-coder-v2:16b"],
-        "ram_gb": "20-24",
-        "tasks": ["feature impl (1-3 files)", "debugging", "refactoring", "decomposition", "M-tasks"],
-    },
-    "cloud": {
-        "description": "High-complexity reasoning",
-        "models": ["claude-sonnet", "claude-opus"],
-        "tasks": ["architecture", "complex refactors", "security/auth", "failed escalations", "final review"],
-    },
+MODEL_TIERS: Dict[str, ModelTier] = {
+    "local_cheap": ModelTier(
+        description="Fast, simple tasks",
+        models=["qwen2.5-coder:7b", "codellama:7b"],
+        ram_gb="4-6",
+        tasks=["formatting", "docstrings", "small fixes", "simple test gen", "S-tasks"],
+        cost_per_1k=0.0,
+        latency_ms=900,
+    ),
+    "local_strong": ModelTier(
+        description="Complex local tasks",
+        models=["qwen2.5-coder:32b", "deepseek-coder-v2:16b"],
+        ram_gb="20-24",
+        tasks=["feature impl (1-3 files)", "debugging", "refactoring", "decomposition", "M-tasks"],
+        cost_per_1k=0.0,
+        latency_ms=2200,
+    ),
+    "cloud": ModelTier(
+        description="High-complexity reasoning",
+        models=["claude-sonnet", "claude-opus"],
+        tasks=["architecture", "complex refactors", "security/auth", "failed escalations", "final review"],
+        cost_per_1k=3.0,
+        latency_ms=3200,
+    ),
 }
 
 
