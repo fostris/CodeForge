@@ -382,6 +382,40 @@ def _build_stuck_hint(error_output: str, iters_stuck: int) -> str:
     return "\n".join(hints)
 
 
+def _is_collection_or_import_failure(error_output: str) -> bool:
+    """Detect pytest collection/import/syntax/no-tests-collected failures."""
+    if not error_output:
+        return False
+
+    patterns = (
+        r"Interrupted:\s+\d+\s+error[s]?\s+during collection",
+        r"ERROR collecting ",
+        r"ERROR tests\/",
+        r"ImportError while importing test module",
+        r"SyntaxError:",
+        r"collected 0 items",
+        r"no tests ran",
+        r"not found: .* \(no match in any of \[",
+    )
+    return any(re.search(pattern, error_output, re.IGNORECASE) for pattern in patterns)
+
+
+def _extract_test_score(error_output: str) -> tuple[int, int]:
+    """Extract (passed, failed_or_error) counts from pytest text output."""
+    if not error_output:
+        return 0, 0
+
+    passed_match = re.search(r'(\d+)\s+passed', error_output)
+    failed_match = re.search(r'(\d+)\s+failed', error_output)
+    error_match = re.search(r'(\d+)\s+error[s]?', error_output)
+
+    passed = int(passed_match.group(1)) if passed_match else 0
+    failed_or_error = (int(failed_match.group(1)) if failed_match else 0) + (
+        int(error_match.group(1)) if error_match else 0
+    )
+    return passed, failed_or_error
+
+
 class PipelineOrchestrator:
     """Main pipeline orchestrator using LangGraph."""
 
@@ -688,6 +722,7 @@ class PipelineOrchestrator:
         best_impl = None
         best_tests = None
         best_error = None
+        prev_errors: list[str] = []
 
         # Stuck detection: if best_score hasn't improved for N iterations,
         # the rollback target itself is the problem — reset and try fresh.
@@ -714,14 +749,38 @@ class PipelineOrchestrator:
 
             # Count failures AND passes for composite score
             error_output = state.get("last_error") or ""
-            current_failed = len(re.findall(r'(?:FAILED|ERROR) tests/', error_output))
-            passed_match = re.search(r'(\d+) passed', error_output)
-            current_passed = int(passed_match.group(1)) if passed_match else 0
+            current_passed, current_failed = _extract_test_score(error_output)
+            is_collection_failure = _is_collection_or_import_failure(error_output)
+            prev_errors.append(error_output)
+            if len(prev_errors) > 5:
+                prev_errors = prev_errors[-5:]
 
             # Composite score: more passes is better; fewer failures breaks ties
             current_score = (current_passed, -current_failed)
 
-            if current_score > best_score:
+            if is_collection_failure:
+                should_regen_test, regen_reason = _should_regenerate_test(
+                    error_output,
+                    test_file,
+                    iteration,
+                    prev_errors[:-1],
+                    task_files=task_files,
+                )
+                if should_regen_test:
+                    state["last_error"] = (
+                        f"{error_output}\n\n[diagnostic] collection/import failure classified as test issue: "
+                        f"{regen_reason}"
+                    )
+                logger.warning(
+                    "Collection/import/syntax failure detected — not updating best snapshot. "
+                    "Preserving traceback for next iteration."
+                )
+                if best_impl:
+                    logger.warning("Rolling back to previous best runnable snapshot after collection failure")
+                    state["implementation_code_clean"] = best_impl
+                    state["test_code_clean"] = best_tests
+                iters_since_improvement += 1
+            elif current_score > best_score:
                 # Genuine progress — save as new best
                 best_score = current_score
                 best_impl = state.get("implementation_code_clean") or ""
@@ -734,7 +793,7 @@ class PipelineOrchestrator:
 
                 # Stuck detection: no improvement for N iterations — reset best
                 # AND inject a hint so the model tries a different approach
-                if iters_since_improvement >= STUCK_THRESHOLD:
+                if iters_since_improvement >= STUCK_THRESHOLD and not _is_collection_or_import_failure(error_output):
                     hint = _build_stuck_hint(error_output, iters_since_improvement)
                     logger.warning(
                         f"Stuck: no improvement for {iters_since_improvement} iterations "
@@ -757,7 +816,7 @@ class PipelineOrchestrator:
             else:
                 # Same score — count as no improvement too
                 iters_since_improvement += 1
-                if iters_since_improvement >= STUCK_THRESHOLD:
+                if iters_since_improvement >= STUCK_THRESHOLD and not _is_collection_or_import_failure(error_output):
                     hint = _build_stuck_hint(error_output, iters_since_improvement)
                     logger.warning(
                         f"Plateau: same score for {iters_since_improvement} iterations — injecting hint"
@@ -767,7 +826,7 @@ class PipelineOrchestrator:
                     iters_since_improvement = 0
 
             if error_output:
-                logger.info(f"Test error (tail): {error_output[-500:]}")
+                logger.info(f"Test error summary: {error_output[-500:]}")
 
         state["status"] = "failing"
         state["last_error"] = f"Max iterations ({max_iterations}) exceeded"
@@ -1073,13 +1132,34 @@ class PipelineOrchestrator:
             result = self.docker_runner.run_tests(test_file)
             state["test_results"] = result.output
             state["test_passed"] = result.passed
+            output = result.output or ""
+
+            task_id = task.get("id", "unknown")
+            iteration = state.get("iteration", 0)
+            log_dir = config.artifacts_dir / "test_logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_file = log_dir / f"{task_id}_iter_{iteration}.log"
+            log_file.write_text(output, encoding="utf-8")
+            try:
+                log_file_ref = str(log_file.relative_to(config.project_root))
+            except ValueError:
+                log_file_ref = str(log_file)
+
+            state["test_run_summary"] = {
+                "task_id": task_id,
+                "iteration": iteration,
+                "test_file": test_file,
+                "passed": result.passed,
+                "is_collection_or_import_failure": _is_collection_or_import_failure(output),
+                "log_file": log_file_ref,
+                "output_chars": len(output),
+            }
 
             if result.passed:
                 logger.info(f"✓ Tests passed for task {task['id']}")
             else:
                 logger.warning(f"✗ Tests failed for task {task['id']}")
-                output = result.output or ""
-                state["last_error"] = output[-3000:] if len(output) > 3000 else output
+                state["last_error"] = output
                 if output:
                     logger.debug(f"Test output (tail): {output[-500:]}")
 
