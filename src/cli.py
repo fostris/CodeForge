@@ -6,6 +6,7 @@ import argparse
 import asyncio
 from datetime import datetime
 from pathlib import Path
+import shutil
 
 from src.config import config, get_logger
 from src.pipeline.graph import run_pipeline
@@ -76,6 +77,11 @@ def main():
         action="store_true",
         help="Print pipeline plan without executing",
     )
+    run_parser.add_argument(
+        "--clean",
+        action="store_true",
+        help="Clean artifacts directory before running (keeps --spec file)",
+    )
     
     # init command
     init_parser = subparsers.add_parser(
@@ -97,7 +103,7 @@ def main():
     args = parser.parse_args()
     
     if args.command == "run":
-        asyncio.run(cmd_run(args.spec, args.dry_run))
+        asyncio.run(cmd_run(args.spec, args.dry_run, args.clean))
     elif args.command == "init":
         cmd_init(args.project_name)
     elif args.command == "health":
@@ -106,7 +112,7 @@ def main():
         parser.print_help()
 
 
-async def cmd_run(spec_path: Path, dry_run: bool = False):
+async def cmd_run(spec_path: Path, dry_run: bool = False, clean: bool = False):
     """Run the pipeline."""
     logger.info(f"Starting pipeline with spec: {spec_path}")
     
@@ -123,6 +129,20 @@ async def cmd_run(spec_path: Path, dry_run: bool = False):
         logger.info(f"Loaded spec from {spec_file}")
     else:
         logger.warning(f"Spec file not found: {spec_file}")
+
+    if clean:
+        cleaned_count = 0
+        artifacts_dir = config.artifacts_dir
+        keep_spec = spec_file.resolve() if spec_file.exists() else None
+        for item in artifacts_dir.iterdir():
+            if keep_spec and item.resolve() == keep_spec:
+                continue
+            if item.is_dir():
+                shutil.rmtree(item)
+            else:
+                item.unlink()
+            cleaned_count += 1
+        logger.info(f"Cleaned artifacts directory: {artifacts_dir} ({cleaned_count} items removed)")
     
     # Create initial state
     state = create_initial_state()
@@ -133,6 +153,7 @@ async def cmd_run(spec_path: Path, dry_run: bool = False):
         print("Execution plan:")
         print(f"  Spec: {spec_path}")
         print(f"  Artifacts dir: {config.artifacts_dir}")
+        print(f"  Clean before run: {clean}")
         print(f"  Ollama: {config.ollama_url}")
         return
     

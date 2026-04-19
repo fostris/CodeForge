@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 
 import docker
-from docker.errors import DockerException, ContainerError
+from docker.errors import ContainerError
 from requests.exceptions import ReadTimeout, ConnectionError as RequestsConnectionError
 
 from src.config import config, get_logger
@@ -34,7 +34,7 @@ class DockerRunner:
         
         try:
             self.client = docker.from_env()
-        except DockerException as e:
+        except Exception as e:
             logger.error(f"Docker not available: {e}")
             self.client = None
     
