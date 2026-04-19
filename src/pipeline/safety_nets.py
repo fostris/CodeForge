@@ -8,13 +8,8 @@ from src.config import get_logger
 logger = get_logger(__name__)
 
 
-def fix_impl_code(code: str) -> str:
-    """Fix common LLM mistakes in implementation code before writing to disk."""
-    if code is None:
-        return None
-    if code == "":
-        return ""
-
+def _fix_declarative_base(code: str) -> str:
+    """Fix SQLAlchemy DeclarativeBase/declarative_base patterns."""
     # Fix: Base = DeclarativeBase() → class Base(DeclarativeBase): pass
     if "DeclarativeBase()" in code:
         logger.warning("Fixing DeclarativeBase() → class Base(DeclarativeBase): pass")
@@ -27,7 +22,11 @@ def fix_impl_code(code: str) -> str:
             "from sqlalchemy.orm import DeclarativeBase"
         )
         code = code.replace("Base = declarative_base()", "class Base(DeclarativeBase):\n    pass")
+    return code
 
+
+def _fix_missing_pydantic_imports(code: str) -> str:
+    """Fix missing BaseModel/BaseSettings/Field imports."""
     # Fix: BaseModel used but not imported
     if "BaseModel" in code and "import BaseModel" not in code and "from pydantic" not in code:
         logger.warning("Code uses BaseModel but missing import — auto-prepending")
@@ -50,6 +49,11 @@ def fix_impl_code(code: str) -> str:
             logger.warning("Code uses Field() but missing import — auto-prepending")
             code = "from pydantic import Field\n" + code
 
+    return code
+
+
+def _fix_pydantic_validator_decorators(code: str) -> str:
+    """Fix missing pydantic validator decorator imports."""
     # Fix: field_validator / model_validator used but not imported
     if "@field_validator" in code and "import field_validator" not in code:
         if "from pydantic import" in code:
@@ -73,6 +77,11 @@ def fix_impl_code(code: str) -> str:
             logger.warning("Code uses @model_validator but missing import — auto-prepending")
             code = "from pydantic import model_validator\n" + code
 
+    return code
+
+
+def _fix_raise_validation_error(code: str) -> str:
+    """Replace direct ValidationError() raises with ValueError() when safe."""
     # Fix: raise ValidationError("string") — pydantic v2 ValidationError has no simple constructor
     # Replace with ValueError which works everywhere
     # BUT: skip if the file defines its own ValidationError class (custom exception)
@@ -96,6 +105,11 @@ def fix_impl_code(code: str) -> str:
                 lines.insert(insert_idx, "ValidationError = ValueError  # alias for pydantic v2 compat")
                 code = '\n'.join(lines)
 
+    return code
+
+
+def _fix_field_wrong_package(code: str) -> str:
+    """Move Field import from pydantic_settings to pydantic."""
     # Fix: from pydantic_settings import Field (wrong location)
     if "from pydantic_settings import" in code and "Field" in code:
         line_match = re.search(r'from pydantic_settings import (.+)', code)
@@ -124,24 +138,24 @@ def fix_impl_code(code: str) -> str:
     return code
 
 
-def fix_test_code(code: str) -> str:
-    """Apply all test safety nets to generated test code."""
-    if not code:
-        return code
-
-    # import pytest
+def _fix_missing_pytest_import(code: str) -> str:
+    """Ensure pytest import is present."""
     if "import pytest" not in code:
         logger.warning("Test code missing 'import pytest' — auto-prepending")
         code = "import pytest\n" + code
-    # import jwt
+    return code
+
+
+def _fix_missing_jwt_import(code: str) -> str:
+    """Ensure jwt import is present when jwt is used."""
     if "import jwt" not in code and "jwt." in code:
         logger.warning("Test code uses jwt but missing 'import jwt' — auto-prepending")
         code = "import jwt\n" + code
-    # ValidationError import
-    if "ValidationError" in code and "import ValidationError" not in code and "from pydantic" not in code:
-        logger.warning("Test code uses ValidationError but missing import — auto-prepending")
-        code = "from pydantic import ValidationError\n" + code
-    # Remove EmailError (standalone pydantic v1 class, not DuplicateEmailError etc.)
+    return code
+
+
+def _fix_email_error_removal(code: str) -> str:
+    """Replace removed EmailError references for pydantic v2 compatibility."""
     if re.search(r'\bEmailError\b', code):
         # Only remove standalone EmailError, not compound names like DuplicateEmailError
         if re.search(r'from\s+pydantic\s+import.*\bEmailError\b', code):
@@ -151,11 +165,19 @@ def fix_test_code(code: str) -> str:
             code = re.sub(r'import\s+EmailError\b', '', code)
         # Replace standalone EmailError usage (not part of longer name)
         code = re.sub(r'(?<![A-Za-z])EmailError(?![A-Za-z])', 'Exception', code)
-    # Fix __init__ imports
+    return code
+
+
+def _fix_explicit_init_imports(code: str) -> str:
+    """Remove explicit __init__ imports."""
     if ".__init__" in code:
         logger.warning("Test code imports from __init__ explicitly — fixing")
         code = re.sub(r'\.__init__(\s)', r'\1', code)
-    # Protocol from wrong module
+    return code
+
+
+def _fix_protocol_wrong_package(code: str) -> str:
+    """Move Protocol from unittest.mock import to typing import."""
     if re.search(r'from unittest\.mock import.*Protocol', code):
         logger.warning("Test code imports Protocol from unittest.mock — fixing")
         code = re.sub(r'(from unittest\.mock import\s+)(.*),\s*Protocol\b(.*)', r'\1\2\3', code)
@@ -167,48 +189,30 @@ def fix_test_code(code: str) -> str:
                 code = code.replace(typing_match.group(0), typing_match.group(0) + ', Protocol')
         else:
             code = "from typing import Protocol\n" + code
-    # Remove numeric module imports
+    return code
+
+
+def _fix_numeric_module_imports(code: str) -> str:
+    """Drop imports from numeric module names."""
     if re.search(r'from \S+\.\d', code):
         logger.warning("Test code imports from numeric filename — removing those lines")
         code = '\n'.join(
             line for line in code.split('\n')
             if not re.match(r'\s*from \S+\.\d\S* import', line)
         )
-    # RS256 → HS256
+    return code
+
+
+def _fix_rs256_to_hs256(code: str) -> str:
+    """Replace RS256 with HS256 in tests."""
     if 'RS256' in code:
         logger.warning("Test code uses RS256 — replacing with HS256")
         code = code.replace('RS256', 'HS256')
-    # raise ValidationError() → raise ValueError() (only if no local class defined)
-    if re.search(r'raise\s+ValidationError\s*\(', code) and not re.search(r'class\s+ValidationError\b', code):
-        logger.warning("Test code raises ValidationError() directly — replacing with ValueError()")
-        code = re.sub(r'raise\s+ValidationError\(', 'raise ValueError(', code)
-    # BaseModel import
-    if 'BaseModel' in code and 'import BaseModel' not in code and 'from pydantic' not in code:
-        logger.warning("Test code uses BaseModel but missing import — auto-prepending")
-        code = "from pydantic import BaseModel\n" + code
-    # BaseSettings import
-    if 'BaseSettings' in code and 'import BaseSettings' not in code and 'from pydantic_settings' not in code:
-        logger.warning("Test code uses BaseSettings but missing import — auto-prepending")
-        code = "from pydantic_settings import BaseSettings\n" + code
-    # Field from wrong package
-    if 'from pydantic_settings import' in code and 'Field' in code:
-        line_match = re.search(r'from pydantic_settings import (.+)', code)
-        if line_match and 'Field' in line_match.group(1):
-            logger.warning("Test code imports Field from pydantic_settings — fixing")
-            new_imports = ", ".join(
-                i.strip() for i in line_match.group(1).split(",") if i.strip() != "Field"
-            )
-            if new_imports:
-                code = code.replace(line_match.group(0), f"from pydantic_settings import {new_imports}")
-            else:
-                code = code.replace(line_match.group(0) + "\n", "")
-            if "from pydantic import" in code:
-                pydantic_match = re.search(r'from pydantic import (.+)', code)
-                if pydantic_match and "Field" not in pydantic_match.group(1):
-                    code = code.replace(pydantic_match.group(0), pydantic_match.group(0) + ", Field")
-            else:
-                code = "from pydantic import Field\n" + code
-    # Strip performance tests
+    return code
+
+
+def _fix_performance_tests(code: str) -> str:
+    """Strip timing-based performance tests and asserts."""
     if re.search(r'assert\s+\w+\s*<\s*\d+', code) and 'elapsed' in code.lower():
         logger.warning("Test code has timing assertions — stripping performance test functions")
         code = re.sub(
@@ -216,5 +220,46 @@ def fix_test_code(code: str) -> str:
             '\n', code, flags=re.DOTALL,
         )
         code = re.sub(r'\n\s*assert\s+elapsed\w*\s*<\s*\d+.*', '', code)
+    return code
+
+
+def fix_impl_code(code: str) -> str:
+    """Fix common LLM mistakes in implementation code before writing to disk."""
+    if code is None:
+        return None
+    if code == "":
+        return ""
+
+    for fixer in (
+        _fix_declarative_base,
+        _fix_missing_pydantic_imports,
+        _fix_pydantic_validator_decorators,
+        _fix_raise_validation_error,
+        _fix_field_wrong_package,
+    ):
+        code = fixer(code)
+
+    return code
+
+
+def fix_test_code(code: str) -> str:
+    """Apply all test safety nets to generated test code."""
+    if not code:
+        return code
+
+    for fixer in (
+        _fix_missing_pytest_import,
+        _fix_missing_jwt_import,
+        _fix_email_error_removal,
+        _fix_explicit_init_imports,
+        _fix_protocol_wrong_package,
+        _fix_numeric_module_imports,
+        _fix_rs256_to_hs256,
+        _fix_raise_validation_error,
+        _fix_missing_pydantic_imports,
+        _fix_field_wrong_package,
+        _fix_performance_tests,
+    ):
+        code = fixer(code)
 
     return code
